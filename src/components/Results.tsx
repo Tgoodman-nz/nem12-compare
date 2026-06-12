@@ -117,7 +117,7 @@ export function Results({ result }: Props) {
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${v}`} />
-            <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
+            <Tooltip formatter={(v) => typeof v === 'number' ? `$${v.toFixed(2)}` : v} />
             <Legend />
             {plans.map((plan, i) => (chartType === 'bar' || chartType === 'both') && (
               <Bar
