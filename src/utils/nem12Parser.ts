@@ -8,37 +8,53 @@ export class Nem12ParseError extends Error {
 }
 
 export function parseNem12(content: string): Nem12Data {
-  const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
+  // Strip UTF-8 BOM (﻿) if present — common in retailer exports
+  const stripped = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content;
+  const lines = stripped.split(/\r?\n/).filter(l => l.trim().length > 0);
 
   if (lines.length === 0) throw new Nem12ParseError('File is empty');
 
-  const first = lines[0].split(',');
-  if (first[0] !== '100') throw new Nem12ParseError('File does not start with a 100 record — is this a NEM12 file?');
-  if (first[3] && !['NEM12', 'NEM13'].includes(first[3].trim())) {
-    throw new Nem12ParseError(`Unexpected file version: ${first[3]}`);
+  // Validate loosely — some retailers omit the 100 header entirely
+  const firstField = lines[0].split(',')[0].trim();
+  if (!['100', '200', '300'].includes(firstField)) {
+    throw new Nem12ParseError(
+      `Unrecognised file format (first field is "${firstField}") — is this a NEM12 file?`
+    );
   }
 
   let nmi = '';
   let intervalLength = 30;
-  let registerId = '';
-  const intervals: IntervalRecord[] = [];
+  let selectedRegister = ''; // register we've committed to for the chosen NMI
+  let currentNmi       = ''; // NMI of the most-recent 200 record
+  let currentRegister  = ''; // register of the most-recent 200 record
+
+  // Keyed by date — last record for a date wins (handles NEM12 correction/substitution records)
+  const intervalMap = new Map<string, IntervalRecord>();
 
   for (const line of lines) {
     const fields = line.split(',');
     const recordType = fields[0].trim();
 
     if (recordType === '200') {
-      // Only grab the first E1 (import/consumption) register we find
-      const rid = fields[3]?.trim() ?? '';
-      if (nmi === '' || rid === 'E1' || rid === '') {
-        nmi = fields[1]?.trim() ?? '';
-        registerId = rid;
-        intervalLength = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
+      const candidateNmi = fields[1]?.trim() ?? '';
+      const rid          = fields[3]?.trim() ?? '';
+      currentNmi      = candidateNmi;
+      currentRegister = rid;
+
+      if (nmi === '') {
+        // Lock in the first NMI we see
+        nmi              = candidateNmi;
+        selectedRegister = rid;
+        intervalLength   = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
+      } else if (candidateNmi === nmi && rid === 'E1' && selectedRegister !== 'E1') {
+        // Same NMI — upgrade to E1 if we originally picked a different register
+        selectedRegister = 'E1';
+        intervalLength   = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
       }
+      // 200 records for a different NMI are ignored
     }
 
-    if (recordType === '300' && nmi !== '') {
-      // Skip if we've moved to a different register after finding E1
+    if (recordType === '300' && nmi !== '' && currentNmi === nmi && currentRegister === selectedRegister) {
       const dateStr = fields[1]?.trim() ?? '';
       if (dateStr.length !== 8) continue;
 
@@ -51,15 +67,18 @@ export function parseNem12(content: string): Nem12Data {
       }
 
       const qualityMethod = fields[2 + intervalsPerDay]?.trim() ?? 'A';
-
-      intervals.push({ date: dateStr, intervals: values, qualityMethod });
+      intervalMap.set(dateStr, { date: dateStr, intervals: values, qualityMethod });
     }
   }
 
   if (nmi === '') throw new Nem12ParseError('No NMI data found — file may be malformed');
-  if (intervals.length === 0) throw new Nem12ParseError('No interval data (300 records) found in file');
+  if (intervalMap.size === 0) throw new Nem12ParseError('No interval data (300 records) found in file');
 
+  const intervals = Array.from(intervalMap.values());
   intervals.sort((a, b) => a.date.localeCompare(b.date));
+
+  console.log(`[parser] NMI: ${nmi}, register: ${selectedRegister}, unique dates: ${intervalMap.size}`,
+    `(${intervals[0]?.date} → ${intervals[intervals.length - 1]?.date})`);
 
   const totalKwh = intervals.reduce(
     (sum, day) => sum + day.intervals.reduce((s, v) => s + v, 0),

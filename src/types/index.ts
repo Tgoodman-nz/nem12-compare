@@ -1,15 +1,8 @@
 export type NemRegion = 'QLD1' | 'NSW1' | 'VIC1' | 'SA1' | 'TAS1';
 
-export interface NmiRecord {
-  nmi: string;
-  registerId: string;
-  intervalLength: number; // minutes
-  unit: string;
-}
-
 export interface IntervalRecord {
   date: string; // YYYYMMDD
-  intervals: number[]; // kWh per interval
+  intervals: number[]; // kWh per interval (negative = export)
   qualityMethod: string;
 }
 
@@ -23,33 +16,50 @@ export interface Nem12Data {
 }
 
 export interface FixedRateConfig {
-  ratePerKwh: number;      // cents/kWh
+  label: string;
+  ratePerKwh: number;        // peak / flat rate, cents/kWh
+  hasOffPeak: boolean;
+  offPeakRate: number;       // cents/kWh (used only when hasOffPeak)
+  offPeakFrom: string;       // "HH:MM" AEST, e.g. "22:00"
+  offPeakTo: string;         // "HH:MM" AEST, e.g. "07:00"
   dailySupplyCharge: number; // cents/day
+  feedInRate: number;        // cents/kWh credit for export (0 = no FiT)
   gstInclusive: boolean;
 }
 
 export interface WholesaleConfig {
-  retailerMargin: number;   // cents/kWh added to spot price
-  dailySubscription: number; // cents/day
-  gstInclusive: boolean;
+  label: string;
+  retailerMargin: number;           // cents/kWh added to spot (Amber = 0), excl. GST
+  networkRatePerKwh: number;        // cents/kWh network/distribution passthrough, excl. GST
+  dailyNetworkSupplyCharge: number; // cents/day network standing charge, excl. GST
+  dailySubscription: number;        // cents/day retailer plan fee, inc. GST
+  feedInRate: number;               // cents/kWh credit for export, excl. GST
 }
 
 export interface SpotPriceInterval {
-  datetime: string; // ISO string, 30-min settlement period end
-  rrp: number;      // $/MWh
+  datetime: string; // NEM-time block-end key "YYYYMMDD-HH:MM" (AEST, no DST)
+  rrp: number;      // $/MWh — average of 5-min dispatch prices in the block
 }
 
-export interface ComparisonResult {
-  fixedTotal: number;     // dollars inc GST
-  wholesaleTotal: number; // dollars inc GST
-  difference: number;     // positive = fixed more expensive
-  dailySeries: DailyCost[];
-  periodDays: number;
-  totalKwh: number;
+export interface PlanTotal {
+  label: string;
+  total: number;       // dollars inc GST (net of FiT credits)
+  usageCost: number;   // dollars — import usage charges
+  supplyCost: number;  // dollars — daily supply / subscription
+  fitCredit: number;   // dollars — feed-in tariff credits (positive = savings)
 }
 
 export interface DailyCost {
-  date: string;       // YYYY-MM-DD
-  fixedCost: number;  // dollars
-  wholesaleCost: number;
+  date: string;         // "YYYY-MM-DD"
+  costs: number[];      // one entry per plan, same order as ComparisonResult.plans
+}
+
+export interface ComparisonResult {
+  plans: PlanTotal[];   // [planA, planB (if enabled), wholesale (if spot data available)]
+  dailySeries: DailyCost[];
+  periodDays: number;        // days actually compared
+  totalFileDays: number;     // total days in NEM12 file
+  totalKwh: number;          // import kWh
+  totalExportKwh: number;
+  spotDataAvailable: boolean;
 }

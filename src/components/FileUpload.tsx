@@ -41,10 +41,19 @@ export function FileUpload({ onParsed }: Props) {
 
   return (
     <div className="card">
-      <h2>Step 1 — Upload NEM12 file</h2>
-      <p className="hint">
-        Your NEM12 file comes from your electricity retailer. It stays on your device — nothing is uploaded.
-      </p>
+      <h2>Step 1 — Upload your meter data</h2>
+      <div className="nem12-explainer">
+        <p>
+          <strong>NEM12</strong> is the standard format Australian electricity retailers use to store your interval meter data —
+          a record of exactly how much electricity you used (and exported, if you have solar) in every 30-minute window.
+        </p>
+        <p>
+          To get yours, contact your retailer and ask for your <strong>NEM12 CSV file</strong> (sometimes called
+          &ldquo;interval meter data&rdquo; or &ldquo;smart meter data&rdquo;). Most retailers can email it within a few days,
+          and many have a self-service download in their app or online portal.
+        </p>
+        <p className="hint">Your data never leaves your device — the file is processed entirely in your browser.</p>
+      </div>
 
       <div
         className={`dropzone${dragging ? ' dragging' : ''}${parsed ? ' success' : ''}`}
