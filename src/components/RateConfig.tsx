@@ -2,6 +2,32 @@ import { useState } from 'react';
 import type { FixedRateConfig, WholesaleConfig, NemRegion } from '../types';
 import { DEV_REGION, DEV_PLAN_A, DEV_PLAN_B, DEV_WHOLESALE } from '../devDefaults';
 
+const STORAGE_KEY = 'nem12-settings-v1';
+
+interface SavedSettings {
+  region: NemRegion;
+  planA: PlanState;
+  hasPlanB: boolean;
+  planB: PlanState;
+  wholesale: { label: string; margin: string; networkRate: string; networkSupply: string; subscription: string; feedIn: string };
+}
+
+function loadSettings(): SavedSettings | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as SavedSettings) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSettings(s: SavedSettings): void {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch { /* quota / private browsing */ }
+}
+
+// Read once at module load — used as initial useState values
+const SAVED = loadSettings();
+
 const REGIONS: { value: NemRegion; label: string }[] = [
   { value: 'VIC1', label: 'Victoria' },
   { value: 'NSW1', label: 'New South Wales / ACT' },
@@ -188,21 +214,25 @@ interface Props {
 }
 
 export function RateConfig({ onConfig, disabled }: Props) {
-  const [region, setRegion] = useState<NemRegion>(DEV_REGION);
+  const [region, setRegion] = useState<NemRegion>(SAVED?.region ?? DEV_REGION);
 
-  const [planA, setPlanA] = useState<PlanState>({ ...defaultPlan('Plan A'), ...DEV_PLAN_A });
-  const [hasPlanB, setHasPlanB] = useState(false);
-  const [planB, setPlanB] = useState<PlanState>({ ...defaultPlan('Plan B'), ...DEV_PLAN_B });
+  const [planA, setPlanA] = useState<PlanState>(SAVED?.planA ?? { ...defaultPlan('Plan A'), ...DEV_PLAN_A });
+  const [hasPlanB, setHasPlanB] = useState(SAVED?.hasPlanB ?? false);
+  const [planB, setPlanB] = useState<PlanState>(SAVED?.planB ?? { ...defaultPlan('Plan B'), ...DEV_PLAN_B });
 
-  const [wholesaleLabel, setWholesaleLabel] = useState(DEV_WHOLESALE.label);
-  const [margin, setMargin] = useState(DEV_WHOLESALE.margin);
-  const [networkRate, setNetworkRate] = useState(DEV_WHOLESALE.networkRate);
-  const [networkSupply, setNetworkSupply] = useState(DEV_WHOLESALE.networkSupply);
-  const [subscription, setSubscription] = useState(DEV_WHOLESALE.subscription);
-  const [wholesaleFeedIn, setWholesaleFeedIn] = useState(DEV_WHOLESALE.feedIn);
+  const [wholesaleLabel, setWholesaleLabel] = useState(SAVED?.wholesale.label ?? DEV_WHOLESALE.label);
+  const [margin, setMargin] = useState(SAVED?.wholesale.margin ?? DEV_WHOLESALE.margin);
+  const [networkRate, setNetworkRate] = useState(SAVED?.wholesale.networkRate ?? DEV_WHOLESALE.networkRate);
+  const [networkSupply, setNetworkSupply] = useState(SAVED?.wholesale.networkSupply ?? DEV_WHOLESALE.networkSupply);
+  const [subscription, setSubscription] = useState(SAVED?.wholesale.subscription ?? DEV_WHOLESALE.subscription);
+  const [wholesaleFeedIn, setWholesaleFeedIn] = useState(SAVED?.wholesale.feedIn ?? DEV_WHOLESALE.feedIn);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    saveSettings({
+      region, planA, hasPlanB, planB,
+      wholesale: { label: wholesaleLabel, margin, networkRate, networkSupply, subscription, feedIn: wholesaleFeedIn },
+    });
     const wholesale: WholesaleConfig = {
       label:                    wholesaleLabel || 'Wholesale / spot',
       retailerMargin:           parseFloat(margin) || 0,
