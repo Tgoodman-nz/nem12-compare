@@ -24,12 +24,40 @@ export function parseNem12(content: string): Nem12Data {
 
   let nmi = '';
   let intervalLength = 30;
-  let selectedRegister = ''; // register we've committed to for the chosen NMI
+  let selectedRegister = ''; // E1 import register
   let currentNmi       = ''; // NMI of the most-recent 200 record
   let currentRegister  = ''; // register of the most-recent 200 record
+  let exportIntervalLength = 30; // B1 export register interval length
 
-  // Keyed by date — last record for a date wins (handles NEM12 correction/substitution records)
+  // Pre-scan 200 records to determine selectedRegister before processing 300 data.
+  // Without this, B1 records that appear before E1 in the file are misrouted to
+  // intervalMap and then silently overwritten when E1 data arrives.
+  for (const line of lines) {
+    const fields = line.split(',');
+    if (fields[0].trim() !== '200') continue;
+    const candidateNmi = fields[1]?.trim() ?? '';
+    const rid          = fields[3]?.trim() ?? '';
+    if (nmi === '') {
+      nmi              = candidateNmi;
+      selectedRegister = rid;
+      intervalLength   = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
+    } else if (candidateNmi === nmi) {
+      if (rid === 'E1' && selectedRegister !== 'E1') {
+        selectedRegister = 'E1';
+        intervalLength   = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
+      }
+      if (rid === 'B1') {
+        exportIntervalLength = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
+      }
+    }
+  }
+  // Reset for the main pass
+  nmi = '';
+
+  // E1 import intervals — last record per date wins (handles correction records)
   const intervalMap = new Map<string, IntervalRecord>();
+  // B1 export intervals — stored as positive values, negated when merged
+  const exportMap = new Map<string, number[]>();
 
   for (const line of lines) {
     const fields = line.split(',');
@@ -40,49 +68,70 @@ export function parseNem12(content: string): Nem12Data {
       const rid          = fields[3]?.trim() ?? '';
       currentNmi      = candidateNmi;
       currentRegister = rid;
-
-      if (nmi === '') {
-        // Lock in the first NMI we see
-        nmi              = candidateNmi;
-        selectedRegister = rid;
-        intervalLength   = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
-      } else if (candidateNmi === nmi && rid === 'E1' && selectedRegister !== 'E1') {
-        // Same NMI — upgrade to E1 if we originally picked a different register
-        selectedRegister = 'E1';
-        intervalLength   = parseInt(fields[8]?.trim() ?? '30', 10) || 30;
-      }
-      // 200 records for a different NMI are ignored
+      if (nmi === '') nmi = candidateNmi;
     }
 
-    if (recordType === '300' && nmi !== '' && currentNmi === nmi && currentRegister === selectedRegister) {
+    if (recordType === '300' && nmi !== '' && currentNmi === nmi) {
       const dateStr = fields[1]?.trim() ?? '';
       if (dateStr.length !== 8) continue;
 
-      const intervalsPerDay = (24 * 60) / intervalLength;
-      const values: number[] = [];
+      if (currentRegister === selectedRegister) {
+        // E1 import data
+        const intervalsPerDay = (24 * 60) / intervalLength;
+        const values: number[] = [];
+        for (let i = 2; i < 2 + intervalsPerDay; i++) {
+          const v = parseFloat(fields[i] ?? '0');
+          values.push(isNaN(v) ? 0 : v);
+        }
+        const qualityMethod = fields[2 + intervalsPerDay]?.trim() ?? 'A';
+        intervalMap.set(dateStr, { date: dateStr, intervals: values, qualityMethod });
 
-      for (let i = 2; i < 2 + intervalsPerDay; i++) {
-        const v = parseFloat(fields[i] ?? '0');
-        values.push(isNaN(v) ? 0 : v);
+      } else if (currentRegister === 'B1') {
+        // B1 export data — store positive values; negated when merged below
+        const intervalsPerDay = (24 * 60) / exportIntervalLength;
+        const values: number[] = [];
+        for (let i = 2; i < 2 + intervalsPerDay; i++) {
+          const v = parseFloat(fields[i] ?? '0');
+          values.push(isNaN(v) ? 0 : v);
+        }
+        exportMap.set(dateStr, values); // last record wins
       }
-
-      const qualityMethod = fields[2 + intervalsPerDay]?.trim() ?? 'A';
-      intervalMap.set(dateStr, { date: dateStr, intervals: values, qualityMethod });
     }
   }
 
   if (nmi === '') throw new Nem12ParseError('No NMI data found — file may be malformed');
   if (intervalMap.size === 0) throw new Nem12ParseError('No interval data (300 records) found in file');
 
+  // Merge B1 export into E1 intervals as negative values.
+  // Each 30-min slot is either import OR export — never both — so B1 > 0 overrides E1.
+  for (const [date, exportVals] of exportMap) {
+    const existing = intervalMap.get(date);
+    if (existing) {
+      exportVals.forEach((v, i) => {
+        if (v > 0) existing.intervals[i] = -v;
+      });
+    } else {
+      // Export-only day (rare but possible — e.g. fully off-grid with battery)
+      intervalMap.set(date, {
+        date,
+        intervals: exportVals.map(v => (v > 0 ? -v : 0)),
+        qualityMethod: 'A',
+      });
+    }
+  }
+
   const intervals = Array.from(intervalMap.values());
   intervals.sort((a, b) => a.date.localeCompare(b.date));
 
-  console.log(`[parser] NMI: ${nmi}, register: ${selectedRegister}, unique dates: ${intervalMap.size}`,
-    `(${intervals[0]?.date} → ${intervals[intervals.length - 1]?.date})`);
-
   const totalKwh = intervals.reduce(
-    (sum, day) => sum + day.intervals.reduce((s, v) => s + v, 0),
+    (sum, day) => sum + day.intervals.reduce((s, v) => s + (v > 0 ? v : 0), 0),
     0
+  );
+
+  console.log(
+    `[parser] NMI: ${nmi}, register: ${selectedRegister}, unique days: ${intervalMap.size}`,
+    `(${intervals[0]?.date} → ${intervals[intervals.length - 1]?.date})`,
+    exportMap.size > 0 ? `B1 export: ${exportMap.size} days` : 'no B1 export data',
   );
 
   return {
