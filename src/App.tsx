@@ -12,6 +12,12 @@ export default function App() {
   const [nem12, setNem12] = useState<Nem12Data | null>(null);
   const [state, setState] = useState<AppState>('idle');
   const [result, setResult] = useState<ComparisonResult | null>(null);
+  const [spotPrices, setSpotPrices] = useState<SpotPriceInterval[]>([]);
+  const [planConfigs, setPlanConfigs] = useState<{
+    planA: FixedRateConfig;
+    planB?: FixedRateConfig;
+    wholesale: WholesaleConfig;
+  } | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [fetchProgress, setFetchProgress] = useState<{ done: number; total: number } | null>(null);
 
@@ -27,12 +33,14 @@ export default function App() {
     setFetchProgress(null);
 
     try {
-      const spotPrices = await fetchSpotPrices(
+      const fetched = await fetchSpotPrices(
         region, nem12.dateFrom, nem12.dateTo,
         (done, total) => setFetchProgress({ done, total }),
       );
-      const comparison = calculateComparison(nem12, planA, wholesale, spotPrices, planB);
+      const comparison = calculateComparison(nem12, planA, wholesale, fetched, planB);
+      setSpotPrices(fetched);
       setResult(comparison);
+      setPlanConfigs({ planA, planB, wholesale });
       setState('done');
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch spot prices.');
@@ -45,6 +53,11 @@ export default function App() {
       <header className="app-header">
         <h1>NEM12 Rate Comparer</h1>
         <p>Upload your electricity meter data and see what you&apos;d have paid under different plans — including wholesale spot pricing.</p>
+        <div className="header-trust">
+          <span>No account · no data collection · your file never leaves your device</span>
+          <span className="header-trust-sep">·</span>
+          <span>We don&apos;t promote any retailer — use local Facebook groups and get quotes for your address to find the best deal</span>
+        </div>
       </header>
 
       <main className="app-main">
@@ -68,7 +81,16 @@ export default function App() {
           </div>
         )}
 
-        {state === 'done' && result && <Results result={result} />}
+        {state === 'done' && result && nem12 && planConfigs && (
+          <Results
+            result={result}
+            nem12={nem12}
+            spotPrices={spotPrices}
+            planA={planConfigs.planA}
+            planB={planConfigs.planB}
+            wholesale={planConfigs.wholesale}
+          />
+        )}
       </main>
 
       <footer className="app-footer">

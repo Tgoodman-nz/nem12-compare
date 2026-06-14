@@ -31,6 +31,20 @@ body {
   font-size: 0.95rem;
 }
 
+.header-trust {
+  margin-top: 0.75rem;
+  font-size: 0.78rem;
+  opacity: 0.7;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.header-trust-sep {
+  opacity: 0.4;
+}
+
 .app-main {
   flex: 1;
   max-width: 800px;
@@ -340,6 +354,35 @@ legend {
   text-align: center;
   margin: 0 0 1.5rem;
 }
+
+.view-toggle {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  margin-bottom: 1.25rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.view-btn {
+  padding: 0.4rem 1.1rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: #fff;
+  color: #64748b;
+  border: none;
+  border-right: 1px solid #cbd5e1;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.view-btn:last-child { border-right: none; }
+.view-btn:hover { background: #f1f5f9; }
+.view-btn.active { background: #0f172a; color: #fff; }
 
 .summary-grid {
   display: grid;

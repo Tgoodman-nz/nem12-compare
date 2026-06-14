@@ -17,6 +17,11 @@ You can compare:
 
 For each plan you get a total cost, a breakdown of usage vs supply charges, solar feed-in credits, and a chart of costs over time — by day, week, month, or year.
 
+Beyond cost comparison, the tool includes two additional analysis panels:
+
+- **Hourly usage profile** — average kWh consumed and exported per hour of the day, with a seasonal filter (Summer / Autumn / Winter / Spring) and an optional average spot price overlay on a second axis
+- **Battery modelling** — models the potential annual saving from adding a home battery, across three scenarios and a range of battery sizes, with a payback calculator
+
 ---
 
 ## Getting your NEM12 file
@@ -72,6 +77,71 @@ The tool fetches real historical AEMO spot prices for your NEM12 date range, app
 | Feed-in tariff (c/kWh) | Credit rate for solar export. **Enter excl. GST.** |
 
 GST is added automatically to all wholesale per-kWh and daily network fields. The subscription is taken as-is (retailers quote it inc. GST).
+
+---
+
+## Hourly usage profile
+
+Below the cost comparison results, the tool shows a bar chart of your **average kWh consumed and exported per hour of the day** — the shape of your typical day, not just the total.
+
+- **X-axis:** hour of the day (12am → 11pm)
+- **Y-axis (left):** average kWh consumed (orange) and exported to grid (blue) per hour
+- **Y-axis (right):** average spot price in c/kWh (purple line) — only shown when spot data was fetched
+
+The **season selector** filters the data to Summer (Dec–Feb), Autumn (Mar–May), Winter (Jun–Aug), or Spring (Sep–Nov), using Southern Hemisphere calendar conventions. Selecting "All year" includes every day in the dataset.
+
+The spot price line is aligned to the same hour-of-day grouping as the consumption bars, so you can see directly whether your usage peaks coincide with expensive or cheap periods — and identify which hours are best for load-shifting or battery discharge.
+
+> Spot price averages are computed from the 30-minute block-end timestamps in the fetched data. Negative hourly averages can occur but are rare — they require negative prices to outnumber positive ones across enough days in the filtered season.
+
+---
+
+## Battery modelling
+
+The battery model answers: *"How much would a home battery have saved me, and how long would it take to pay off?"*
+
+It replays your actual interval data day by day, simulating a virtual battery, and computes the annual saving under three scenarios. Results are shown for each configured plan (fixed and/or wholesale), since battery value depends heavily on the price spread the plan creates.
+
+### Three scenarios
+
+| Scenario | Strategy | What it represents |
+|---|---|---|
+| **Pessimistic** | Charges from solar export only; discharges whenever consuming from grid | A basic battery with no smart control — solar self-consumption only, no grid charging |
+| **Optimistic** | Charges from solar export + cheapest ⅓ of grid intervals each day; discharges at most expensive ⅓ | A smart battery controller with good day-ahead price forecasting |
+| **Best case** | Charges from solar export + cheapest ½ of grid intervals; discharges at most expensive ½ | Theoretical near-optimum — perfect knowledge of the day's prices |
+
+All three scenarios carry the battery's state of charge (SOC) over from day to day, so residual charge is never wasted at midnight.
+
+### Battery parameters
+
+| Field | Default | Notes |
+|---|---|---|
+| Max charge/discharge (kW) | 5 kW | The battery's rated power — limits how much can flow per interval |
+| Round-trip efficiency (%) | 90% | Charging losses: 1 kWh in → 0.9 kWh stored and available to discharge |
+| Installed cost ($/kWh capacity) | $800/kWh | Used only for payback calculation; doesn't affect the simulated savings |
+
+### Outputs
+
+**Saving vs battery size chart** — plots annual saving ($/yr) against battery size (5–30 kWh) for each scenario. The curve shows diminishing returns as the battery gets larger relative to your daily solar surplus and price spread. The inflection point suggests the optimal size.
+
+**$ summary cards** — for a selected battery size, each scenario shows:
+- Annual saving in $/yr (annualised from your actual data)
+- Payback period in years (`installed cost ÷ annual saving`)
+- kWh cycled per year through the battery
+
+### How savings are calculated
+
+For each interval in each day, the simulator computes the revised grid import/export after the battery acts, then compares the cost to the original:
+
+```
+saving = original_usage_cost − revised_usage_cost
+```
+
+Supply charges are excluded — they're fixed per day and cancel out. For grid charging intervals, the battery *increases* import at the cheap price; for discharge intervals, it *reduces* import at the expensive price. The net saving is the arbitrage gain minus the opportunity cost of solar not exported.
+
+Fixed plans are simulated across all NEM12 days. Wholesale is simulated only over days where spot price data was fetched. Both are then annualised independently (`total_saving × 365.25 ÷ days_in_dataset`).
+
+> Battery savings are indicative. Real-world results depend on battery degradation, installer configuration, network tariff structure, and whether the retailer allows spot-price export. The "best case" scenario assumes perfect price foresight — achievable by no real controller.
 
 ---
 
@@ -182,3 +252,6 @@ No backend. No database. No tracking. All computation happens in the browser.
 - **Spot price history** — the OpenElectricity API provides up to 730 days of 5-minute spot price history. NEM12 data older than this will not have a wholesale comparison.
 - **Single NMI** — multi-NMI files are not supported; only the first NMI is processed.
 - **30-minute intervals only** — 5-minute interval meters are not yet supported (though NEM12 files from most residential retailers use 30-minute intervals).
+- **Battery model is indicative** — the simulation uses perfect or near-perfect price foresight and ignores battery degradation, installer configuration limits, network export constraints, and dynamic retailer pricing rules. Treat it as a planning tool, not a financial projection.
+- **Gross solar generation not available** — NEM12 records net import/export at the meter, not gross generation. The battery model works from net intervals, so solar self-consumption already happening before the meter is invisible to the simulation.
+- **Seasonal spot price coverage** — if your NEM12 file spans multiple years but the OpenElectricity API only has spot data for the most recent 730 days, earlier seasons may be absent from the wholesale and battery calculations.

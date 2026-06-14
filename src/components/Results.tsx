@@ -3,16 +3,24 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
 } from 'recharts';
-import type { ComparisonResult } from '../types';
+import type { ComparisonResult, Nem12Data, SpotPriceInterval, FixedRateConfig, WholesaleConfig } from '../types';
+import { HourlyProfileChart } from './HourlyProfileChart';
+import { BatteryModel } from './BatteryModel';
 
 interface Props {
   result: ComparisonResult;
+  nem12: Nem12Data;
+  spotPrices: SpotPriceInterval[];
+  planA: FixedRateConfig;
+  planB?: FixedRateConfig;
+  wholesale: WholesaleConfig;
 }
 
 const PLAN_COLORS = ['#f97316', '#8b5cf6', '#10b981'];
 
 type Granularity = 'daily' | 'weekly' | 'monthly' | 'yearly';
 type ChartType = 'bar' | 'line' | 'both';
+type ViewMode = 'net' | 'gridOut' | 'feedIn';
 
 const GRANULARITY_LABELS: Record<Granularity, string> = {
   daily: 'Daily',
@@ -21,37 +29,66 @@ const GRANULARITY_LABELS: Record<Granularity, string> = {
   yearly: 'Yearly',
 };
 
-export function Results({ result }: Props) {
+export function Results({ result, nem12, spotPrices, planA, planB, wholesale }: Props) {
   const { plans, dailySeries, periodDays, totalFileDays, totalKwh, totalExportKwh, spotDataAvailable } = result;
 
   const defaultGranularity: Granularity = dailySeries.length > 90 ? 'weekly' : 'daily';
   const [granularity, setGranularity] = useState<Granularity>(defaultGranularity);
   const [chartType, setChartType] = useState<ChartType>('bar');
+  const [viewMode, setViewMode] = useState<ViewMode>('net');
 
   const cheapest = plans.length > 1
     ? plans.reduce((min, p) => (p.total < min.total ? p : min), plans[0])
     : null;
 
-  const chartData = rollup(dailySeries, plans, granularity);
+  const dataKey = viewMode === 'gridOut' ? 'gridOut' : viewMode === 'feedIn' ? 'feedIn' : 'costs';
+  const chartData = rollup(dailySeries, plans, granularity, dataKey);
 
   return (
     <div className="card">
       <h2>Results</h2>
 
+      <div className="view-toggle">
+        {([['net', 'Both (net)'], ['gridOut', 'Grid out'], ['feedIn', 'Feed in']] as [ViewMode, string][]).map(([v, label]) => (
+          <button
+            key={v}
+            className={`view-btn${viewMode === v ? ' active' : ''}`}
+            onClick={() => setViewMode(v)}
+          >{label}</button>
+        ))}
+      </div>
+
       <div className="summary-grid">
         {plans.map((plan, i) => {
-          const isCheapest = cheapest !== null && plan.label === cheapest.label;
+          const gridOutTotal = plan.usageCost + plan.supplyCost;
+          const displayValue = viewMode === 'gridOut' ? gridOutTotal
+            : viewMode === 'feedIn' ? plan.fitCredit
+            : plan.total;
+          const isCheapest = viewMode !== 'feedIn'
+            && cheapest !== null && plan.label === cheapest.label;
           const wholesalePlan = spotDataAvailable ? plans[plans.length - 1] : null;
           return (
             <div key={plan.label} className={`summary-box${isCheapest ? ' highlight saving' : ''}`}>
               <div className="summary-label">{plan.label}{isCheapest ? ' ✓ cheapest' : ''}</div>
-              <div className="summary-value">${plan.total.toFixed(2)}</div>
-              <div className="summary-sub">
-                Usage ${plan.usageCost.toFixed(2)} · Supply ${plan.supplyCost.toFixed(2)}
-                {plan.fitCredit > 0 && ` · FiT −$${plan.fitCredit.toFixed(2)}`}
+              <div className="summary-value">
+                {viewMode === 'feedIn'
+                  ? displayValue >= 0
+                    ? `−$${displayValue.toFixed(2)}`
+                    : `+$${(-displayValue).toFixed(2)}`
+                  : `$${displayValue.toFixed(2)}`}
               </div>
-              {wholesalePlan !== null && i < plans.length - 1 && (() => {
-                const diff = plan.total - wholesalePlan.total;
+              <div className="summary-sub">
+                {viewMode === 'feedIn'
+                  ? displayValue >= 0 ? 'solar export credit' : 'solar export cost (negative spot prices)'
+                  : <>Usage ${plan.usageCost.toFixed(2)} · Supply ${plan.supplyCost.toFixed(2)}
+                      {plan.fitCredit > 0 && ` · FiT −$${plan.fitCredit.toFixed(2)}`}</>
+                }
+              </div>
+              {viewMode !== 'feedIn' && wholesalePlan !== null && i < plans.length - 1 && (() => {
+                const wVal = viewMode === 'gridOut'
+                  ? wholesalePlan.usageCost + wholesalePlan.supplyCost
+                  : wholesalePlan.total;
+                const diff = displayValue - wVal;
                 return (
                   <div className="summary-sub">
                     {diff > 0
@@ -88,7 +125,10 @@ export function Results({ result }: Props) {
 
       <div className="chart-wrap">
         <div className="chart-header">
-          <h3>{GRANULARITY_LABELS[granularity]} cost comparison</h3>
+          <h3>
+            {GRANULARITY_LABELS[granularity]}{' '}
+            {viewMode === 'feedIn' ? 'feed-in credits' : viewMode === 'gridOut' ? 'grid consumption' : 'net cost'}
+          </h3>
           <div className="chart-controls">
             <select
               className="granularity-select"
@@ -144,6 +184,19 @@ export function Results({ result }: Props) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+
+      <HourlyProfileChart nem12={nem12} spotPrices={spotPrices} />
+      <BatteryModel
+        nem12={nem12}
+        spotPrices={spotPrices}
+        planA={planA}
+        planB={planB}
+        wholesale={wholesale}
+        baselines={plans.map(p => ({
+          label: p.label,
+          annualCost: p.total * 365.25 / periodDays,
+        }))}
+      />
     </div>
   );
 }
@@ -152,19 +205,21 @@ function rollup(
   series: ComparisonResult['dailySeries'],
   plans: ComparisonResult['plans'],
   granularity: Granularity,
+  dataKey: 'costs' | 'gridOut' | 'feedIn',
 ): Record<string, string | number>[] {
   if (granularity === 'daily') {
-    return series.map(d => toChartRow(d.date, d.costs, plans, 'daily'));
+    return series.map(d => toChartRow(d.date, d[dataKey], plans, 'daily'));
   }
 
   const buckets = new Map<string, { firstDate: string; costs: number[] }>();
   for (const day of series) {
     const key = bucketKey(day.date, granularity);
+    const vals = day[dataKey];
     const existing = buckets.get(key);
     if (existing) {
-      day.costs.forEach((c, i) => { existing.costs[i] = (existing.costs[i] ?? 0) + c; });
+      vals.forEach((c, i) => { existing.costs[i] = (existing.costs[i] ?? 0) + c; });
     } else {
-      buckets.set(key, { firstDate: day.date, costs: [...day.costs] });
+      buckets.set(key, { firstDate: day.date, costs: [...vals] });
     }
   }
 

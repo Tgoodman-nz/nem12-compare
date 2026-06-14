@@ -51,7 +51,9 @@ export interface PlanTotal {
 
 export interface DailyCost {
   date: string;         // "YYYY-MM-DD"
-  costs: number[];      // one entry per plan, same order as ComparisonResult.plans
+  costs: number[];      // net cost per plan (gridOut − feedIn)
+  gridOut: number[];    // usage + supply cost per plan
+  feedIn: number[];     // FiT credits per plan (positive = savings)
 }
 
 export interface ComparisonResult {

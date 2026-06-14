@@ -82,15 +82,23 @@ function calcWholesaleDay(
     const kwh = day.intervals[i];
     if (kwh === 0) continue;
 
-    if (kwh < 0) {
-      if (cfg.feedInRate > 0) fitCredit += (-kwh * fitRate) / 100;
-    } else {
-      // Map interval index to NEM block-end key "YYYYMMDD-HH:MM"
-      const endMins = i * intervalLength + intervalLength;
-      const h = Math.floor(endMins / 60) % 24;
-      const m = endMins % 60;
-      const key = `${day.date}-${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    // Map interval index to NEM block-end key "YYYYMMDD-HH:MM"
+    const endMins = i * intervalLength + intervalLength;
+    const h = Math.floor(endMins / 60) % 24;
+    const m = endMins % 60;
+    const key = `${day.date}-${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 
+    if (kwh < 0) {
+      // Export — credit at the live spot rate (same price signal as import).
+      // If no spot data for this interval, fall back to the fixed feedInRate.
+      const rrp = spotIndex.get(key);
+      if (rrp !== undefined) {
+        const spotFitRate = (rrp / 10) * GST; // wholesale spot excl. GST → ×1.1
+        fitCredit += (-kwh * spotFitRate) / 100;
+      } else if (cfg.feedInRate > 0) {
+        fitCredit += (-kwh * fitRate) / 100;
+      }
+    } else {
       const rrp = spotIndex.get(key); // $/MWh
       if (rrp !== undefined) {
         // spot ($/MWh ÷ 10 = c/kWh) + network passthrough + retailer margin → excl. GST → ×1.1
@@ -130,9 +138,17 @@ export function calculateComparison(
 
   const hasSpotData = datesWithSpot.size > 0;
 
-  const dailySeries: DailyCost[] = [];
+  // Totals reflect the full file, not just the spot-data window.
   let totalKwh = 0;
   let totalExportKwh = 0;
+  for (const day of nem12.intervals) {
+    for (const kwh of day.intervals) {
+      if (kwh > 0) totalKwh += kwh;
+      else if (kwh < 0) totalExportKwh += -kwh;
+    }
+  }
+
+  const dailySeries: DailyCost[] = [];
   let processedDays = 0;
 
   for (const day of nem12.intervals) {
@@ -143,7 +159,9 @@ export function calculateComparison(
 
     const [y, mo, d] = [day.date.slice(0, 4), day.date.slice(4, 6), day.date.slice(6, 8)];
     const dateLabel = `${y}-${mo}-${d}`;
-    const dayCosts: number[] = [];
+    const dayCosts:   number[] = [];
+    const dayGridOut: number[] = [];
+    const dayFeedIn:  number[] = [];
 
     // Fixed plans
     fixedPlans.forEach((cfg, idx) => {
@@ -154,6 +172,8 @@ export function calculateComparison(
       acc[idx].fitCredit  += fitCredit;
       acc[idx].total      += net;
       dayCosts.push(round2(net));
+      dayGridOut.push(round2(supplyCost + usageCost));
+      dayFeedIn.push(round2(fitCredit));
     });
 
     // Wholesale — only meaningful when spot data exists
@@ -166,14 +186,11 @@ export function calculateComparison(
       acc[wi].fitCredit  += fitCredit;
       acc[wi].total      += wNet;
       dayCosts.push(round2(wNet));
+      dayGridOut.push(round2(supplyCost + usageCost));
+      dayFeedIn.push(round2(fitCredit));
     }
 
-    dailySeries.push({ date: dateLabel, costs: dayCosts });
-
-    for (const kwh of day.intervals) {
-      if (kwh > 0) totalKwh += kwh;
-      else if (kwh < 0) totalExportKwh += -kwh;
-    }
+    dailySeries.push({ date: dateLabel, costs: dayCosts, gridOut: dayGridOut, feedIn: dayFeedIn });
   }
 
   const fixedPlanTotals: PlanTotal[] = fixedPlans.map((cfg, idx) => ({
