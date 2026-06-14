@@ -100,8 +100,6 @@ export default function App() {
   );
 }
 
-const OE_BASE = 'https://api.openelectricity.org.au';
-
 const CHUNK_DAYS = 7;
 const BATCH_SIZE = 10; // concurrent requests per batch
 
@@ -111,8 +109,6 @@ async function fetchSpotPrices(
   dateTo: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<SpotPriceInterval[]> {
-  const apiKey = import.meta.env.VITE_OE_API_KEY as string;
-  if (!apiKey) throw new Error('No API key — add VITE_OE_API_KEY to .env.local and restart the dev server.');
 
   // API limit: 8 days per request for 5m interval. Batch to avoid rate limiting.
   // Chunks that fall outside the API's 730-day history window are silently skipped.
@@ -123,7 +119,7 @@ async function fetchSpotPrices(
   const allRows: Array<[string, number | null]>[] = [];
   for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
     const batch = chunks.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map(([s, e]) => fetchChunk(region, s, e, apiKey)));
+    const results = await Promise.all(batch.map(([s, e]) => fetchChunk(region, s, e)));
     allRows.push(...results);
     done += batch.length;
     onProgress?.(done, total);
@@ -162,7 +158,6 @@ async function fetchChunk(
   region: NemRegion,
   start: string,
   end: string,
-  apiKey: string,
 ): Promise<Array<[string, number | null]>> {
   const params = new URLSearchParams({
     interval: '5m',
@@ -172,9 +167,7 @@ async function fetchChunk(
   });
   params.append('metrics', 'price');
 
-  const res = await fetch(`${OE_BASE}/v4/market/network/NEM?${params}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
+  const res = await fetch(`/api/spot?${params}`);
 
   if (!res.ok) {
     const msg = await res.text().catch(() => '');
