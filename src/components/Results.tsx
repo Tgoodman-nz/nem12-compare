@@ -119,8 +119,9 @@ export function Results({ result, nem12, spotPrices, planA, planB, wholesale }: 
         {totalExportKwh > 0 && ` · ${totalExportKwh.toFixed(0)} kWh exported`}
       </div>
       <p className="results-caveat">
-        Fixed plan costs are calculated at the rates you entered — if your rates changed during this period, actual costs will differ.
-        Wholesale costs use real historical AEMO spot prices and are not affected by this.
+        Fixed plan costs are calculated at the rates you entered and do not reflect rate changes during the period, government energy rebates or relief payments, or retailer credits.
+        Your actual bills may differ from the figures shown.
+        Wholesale costs use real historical AEMO spot prices and are not affected by rate changes.
       </p>
 
       <div className="chart-wrap">
