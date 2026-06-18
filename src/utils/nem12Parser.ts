@@ -7,15 +7,68 @@ export class Nem12ParseError extends Error {
   }
 }
 
-export function parseNem12(content: string): Nem12Data {
+// Parses the flat "Meter Data Report" CSV: one row per day, date first, 48 half-hourly values.
+// Format: YYYYMMDD, v1, v2, …, v48, quality, daily_total
+function parseMeterDataReport(lines: string[], filename?: string): Nem12Data {
+  // Try to extract NMI from filename pattern: XXXXXXXX_NMI_YYYYMMDD_...
+  let nmi = 'UNKNOWN';
+  if (filename) {
+    const parts = filename.split('_');
+    if (parts.length >= 2 && /^\d{10,11}$/.test(parts[1])) nmi = parts[1];
+  }
+
+  const intervalMap = new Map<string, IntervalRecord>();
+  for (const line of lines) {
+    const fields = line.split(',');
+    const dateStr = fields[0].trim();
+    if (!/^\d{8}$/.test(dateStr)) continue;
+    const values: number[] = [];
+    for (let i = 1; i <= 48; i++) {
+      const v = parseFloat(fields[i] ?? '0');
+      values.push(isNaN(v) ? 0 : v);
+    }
+    const qualityMethod = fields[49]?.trim() ?? 'A';
+    intervalMap.set(dateStr, { date: dateStr, intervals: values, qualityMethod });
+  }
+
+  if (intervalMap.size === 0) throw new Nem12ParseError('No interval data found in file');
+
+  const intervals = Array.from(intervalMap.values());
+  intervals.sort((a, b) => a.date.localeCompare(b.date));
+
+  const totalKwh = intervals.reduce(
+    (sum, day) => sum + day.intervals.reduce((s, v) => s + (v > 0 ? v : 0), 0),
+    0
+  );
+
+  console.log(
+    `[parser] MeterDataReport NMI: ${nmi}, unique days: ${intervalMap.size}`,
+    `(${intervals[0]?.date} → ${intervals[intervals.length - 1]?.date})`,
+  );
+
+  return {
+    nmi,
+    intervalLength: 30,
+    dateFrom: intervals[0].date,
+    dateTo: intervals[intervals.length - 1].date,
+    intervals,
+    totalKwh: Math.round(totalKwh * 1000) / 1000,
+  };
+}
+
+export function parseNem12(content: string, filename?: string): Nem12Data {
   // Strip UTF-8 BOM (﻿) if present — common in retailer exports
   const stripped = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content;
   const lines = stripped.split(/\r?\n/).filter(l => l.trim().length > 0);
 
   if (lines.length === 0) throw new Nem12ParseError('File is empty');
 
-  // Validate loosely — some retailers omit the 100 header entirely
   const firstField = lines[0].split(',')[0].trim();
+
+  // Detect flat Meter Data Report format (date-first, no 100/200/300 records)
+  if (/^\d{8}$/.test(firstField)) return parseMeterDataReport(lines, filename);
+
+  // Validate loosely — some retailers omit the 100 header entirely
   if (!['100', '200', '300'].includes(firstField)) {
     throw new Nem12ParseError(
       `Unrecognised file format (first field is "${firstField}") — is this a NEM12 file?`
