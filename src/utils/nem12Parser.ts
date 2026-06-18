@@ -9,31 +9,91 @@ export class Nem12ParseError extends Error {
 
 // Parses the flat "Meter Data Report" CSV: one row per day, date first, 48 half-hourly values.
 // Format: YYYYMMDD, v1, v2, …, v48, quality, daily_total
+// Files may contain two sections (B1 export then E1 import). The first section has no header;
+// the second starts with Stream ID / LOCAL TIME / Date/Time header rows that identify the register.
 function parseMeterDataReport(lines: string[], filename?: string): Nem12Data {
-  // Try to extract NMI from filename pattern: XXXXXXXX_NMI_YYYYMMDD_...
   let nmi = 'UNKNOWN';
   if (filename) {
     const parts = filename.split('_');
     if (parts.length >= 2 && /^\d{10,11}$/.test(parts[1])) nmi = parts[1];
   }
 
-  const intervalMap = new Map<string, IntervalRecord>();
+  const importMap = new Map<string, IntervalRecord>();
+  const exportMap = new Map<string, number[]>();
+  // Buffer for the headerless first section — assigned once we know the second section's register.
+  const firstBuffer = new Map<string, IntervalRecord>();
+
+  let pastFirstSection = false;
+  let currentRegister: string | null = null;
+  let pendingRegister: string | null = null;
+
   for (const line of lines) {
     const fields = line.split(',');
-    const dateStr = fields[0].trim();
-    if (!/^\d{8}$/.test(dateStr)) continue;
+    const first = fields[0].trim();
+
+    if (first === 'Stream ID') {
+      pendingRegister = fields.find(f => f.trim() === 'E1' || f.trim() === 'B1')?.trim() ?? null;
+      continue;
+    }
+    if (first === 'Date/Time') {
+      pastFirstSection = true;
+      currentRegister = pendingRegister;
+      continue;
+    }
+    if (first === 'LOCAL TIME' || first === 'Total for Period') continue;
+
+    if (!/^\d{8}$/.test(first)) continue;
+
     const values: number[] = [];
     for (let i = 1; i <= 48; i++) {
       const v = parseFloat(fields[i] ?? '0');
       values.push(isNaN(v) ? 0 : v);
     }
     const qualityMethod = fields[49]?.trim() ?? 'A';
-    intervalMap.set(dateStr, { date: dateStr, intervals: values, qualityMethod });
+    const record: IntervalRecord = { date: first, intervals: values, qualityMethod };
+
+    if (!pastFirstSection) {
+      firstBuffer.set(first, record);
+    } else if (currentRegister === 'E1') {
+      importMap.set(first, record);
+    } else if (currentRegister === 'B1') {
+      exportMap.set(first, values);
+    } else {
+      importMap.set(first, record);
+    }
   }
 
-  if (intervalMap.size === 0) throw new Nem12ParseError('No interval data found in file');
+  // Assign the headerless first section to the complementary register.
+  if (firstBuffer.size > 0) {
+    if (importMap.size > 0) {
+      // Second section was E1 → first section is B1 export
+      for (const [date, record] of firstBuffer) exportMap.set(date, record.intervals);
+    } else if (exportMap.size > 0) {
+      // Second section was B1 → first section is E1 import
+      for (const [date, record] of firstBuffer) importMap.set(date, record);
+    } else {
+      // Single section — treat as import
+      for (const [date, record] of firstBuffer) importMap.set(date, record);
+    }
+  }
 
-  const intervals = Array.from(intervalMap.values());
+  // Merge export into import map as negative values (same logic as NEM12 B1 merge)
+  for (const [date, exportVals] of exportMap) {
+    const existing = importMap.get(date);
+    if (existing) {
+      exportVals.forEach((v, i) => { if (v > 0) existing.intervals[i] = -v; });
+    } else {
+      importMap.set(date, {
+        date,
+        intervals: exportVals.map(v => (v > 0 ? -v : 0)),
+        qualityMethod: 'A',
+      });
+    }
+  }
+
+  if (importMap.size === 0) throw new Nem12ParseError('No interval data found in file');
+
+  const intervals = Array.from(importMap.values());
   intervals.sort((a, b) => a.date.localeCompare(b.date));
 
   const totalKwh = intervals.reduce(
@@ -42,8 +102,9 @@ function parseMeterDataReport(lines: string[], filename?: string): Nem12Data {
   );
 
   console.log(
-    `[parser] MeterDataReport NMI: ${nmi}, unique days: ${intervalMap.size}`,
+    `[parser] MeterDataReport NMI: ${nmi}, unique days: ${importMap.size}`,
     `(${intervals[0]?.date} → ${intervals[intervals.length - 1]?.date})`,
+    exportMap.size > 0 ? `B1 export: ${exportMap.size} days` : 'no export data',
   );
 
   return {
